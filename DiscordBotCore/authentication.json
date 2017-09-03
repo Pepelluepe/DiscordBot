@@ -1,5 +1,6 @@
 ﻿{
   "auth": {
-    "token": "yourtokenhere"
+    "token": "yourtokenhere",
+    "BotUsername" :  "BotName"
   } 
 }
