@@ -1,21 +1,12 @@
 ﻿using System;
 using System.IO;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Discord;
-using Discord.Commands;
-using DiscordBot.Models;
 using Microsoft.Extensions.Configuration;
 using Discord.WebSocket;
 using System.Text.RegularExpressions;
 using DiscordBotCore.ChatBot;
-using System.Net.Sockets;
-using Newtonsoft.Json;
-using DiscordBotCore;
-using System.Net.NetworkInformation;
-using System.Net;
 using DiscordBotCore.AdminBot;
 
 namespace DiscordBot
@@ -27,6 +18,8 @@ namespace DiscordBot
         private ChatBot chatBot;
         private AdminBot adminBot;
         private string BotUsername;
+        private IRole inGameRole;
+        private IRole streamingRole;
 
         public static void Main(string[] args)
             => new Program().MainAsync().GetAwaiter().GetResult();
@@ -66,25 +59,46 @@ namespace DiscordBot
             await UpdateInGame(newInfo);
         }
 
-        private async Task GuildAvailable(SocketGuild guild)
+        private Task GuildAvailable(SocketGuild guild)
         {
-            foreach (SocketGuildUser user in guild.Users)
+            Parallel.ForEach(guild.Users, (user) =>
             {
-                await UpdateInGame(user);
-            }
+                Task.Run(async () => await UpdateInGame(user));
+            });
+
+            return Task.FromResult(0);
         }
 
         private async Task UpdateInGame(SocketGuildUser user)
         {
             bool inGame = user.Game.HasValue;
-            IRole inGameRole = _client.GetGuild(user.Guild.Id).Roles.FirstOrDefault(x => x.Name == "In Game");
+
+            if (inGameRole == null)
+            {
+                inGameRole = _client.GetGuild(user.Guild.Id).Roles.FirstOrDefault(x => x.Name == "In Game");
+            }
+
+            if (streamingRole == null)
+            {
+                streamingRole = _client.GetGuild(user.Guild.Id).Roles.FirstOrDefault(x => x.Name == "Streaming");
+            }
+
             if (inGame)
             {
+                if (user.Game.Value.StreamType != StreamType.NotStreaming)
+                {
+                    await user.AddRoleAsync(streamingRole);
+                }
+                else
+                {
+                    await user.RemoveRoleAsync(streamingRole);
+                }
                 await user.AddRoleAsync(inGameRole);
             }
             else
             {
                 await user.RemoveRoleAsync(inGameRole);
+                await user.RemoveRoleAsync(streamingRole);
             }
         }
 
@@ -129,17 +143,19 @@ namespace DiscordBot
         private bool IsSafeForWork(string content)
         {
             bool safe = true;
+            var profanityList = Configuration.GetSection("Profanity").AsEnumerable();
+            var sync = new Object();
 
-            IConfigurationSection profanitySection = Configuration.GetSection("Profanity");
-            var profanityList = profanitySection.AsEnumerable();
-            foreach (var bad in profanityList)
-            {
-                if (bad.Value != null && content.Contains(bad.Value))
+            Parallel.ForEach(profanityList, (bad, loopState) => {
+                if (bad.Value != null && content.ToLower().Contains(bad.Value.ToLower()))
                 {
-                    safe = false;
-                    break;
+                    lock (sync)
+                    {
+                        safe = false;
+                        loopState.Stop();
+                    }
                 }
-            }
+            });
 
             return safe;
         }
